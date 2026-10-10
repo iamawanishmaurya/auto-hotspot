@@ -1,0 +1,10 @@
+# Logs written by New-AutoHotspot.ps1 at runtime
+run.log
+*.log
+
+# Local scratch
+*.bak
+*.tmp
+Thumbs.db
+desktop.ini
+.DS_Store
