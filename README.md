@@ -9,8 +9,10 @@ student sits down, and where a standard user should not be able to quietly chang
 
 - **One file of real work.** `New-AutoHotspot.ps1` has no modules to install and no
   dependencies to fetch. Copy it and it runs.
-- **One click.** `Run-Hotspot.cmd` handles the UAC prompt, unblocks the file, and works
-  around the unsigned-script execution policy for you.
+- **One line to install.** `irm ... | iex` downloads it, asks for Administrator, sets
+  everything up, and reboots. No cloning, no file juggling.
+- **Or just double-click.** `Install.cmd` and `Run-Hotspot.cmd` handle the UAC prompt,
+  unblock the file, and work around the unsigned-script execution policy for you.
 - **Self-healing.** A SYSTEM scheduled task re-runs it at boot, at logon, and every
   5 minutes. A hotspot that someone switched off is back within 5 minutes.
 - **Fully reversible.** `Revert-Hotspot.cmd` puts the machine back exactly as Windows
@@ -20,8 +22,41 @@ student sits down, and where a standard user should not be able to quietly chang
 
 ## Quick start
 
+### The one-liner
+
+Open PowerShell and paste this. It downloads, elevates, configures, and reboots:
+
+```powershell
+curl.exe -sSL https://raw.githubusercontent.com/iamawanishmaurya/auto-hotspot/main/Install-AutoHotspot.ps1 | powershell -NoProfile -ExecutionPolicy Bypass -Command -
+```
+
+No curl? The built-in equivalent works the same way:
+
+```powershell
+irm https://raw.githubusercontent.com/iamawanishmaurya/auto-hotspot/main/Install-AutoHotspot.ps1 | iex
+```
+
+Or download it and run it, which reads better and shows the code before it executes:
+
+```powershell
+irm https://raw.githubusercontent.com/iamawanishmaurya/auto-hotspot/main/Install-AutoHotspot.ps1 -OutFile Install-AutoHotspot.ps1
+notepad .\Install-AutoHotspot.ps1     # read it first if you want to
+.\Install-AutoHotspot.ps1
+```
+
+> **The machine reboots at the end**, after a 30-second countdown you can cancel with
+> `Ctrl+C`. That is deliberate — it proves the hotspot comes back by itself on a cold
+> boot. To skip it, add `-NoReboot`:
+>
+> ```powershell
+> irm https://raw.githubusercontent.com/iamawanishmaurya/auto-hotspot/main/Install-AutoHotspot.ps1 | iex -NoReboot
+> ```
+
+### The double-click route
+
 1. Download or clone this repo to the PC.
-2. Double-click **`Run-Hotspot.cmd`**.
+2. Double-click **`Install.cmd`** (full install, reboots) or
+   **`Run-Hotspot.cmd`** (configure and start, no reboot).
 3. Click **Yes** on the User Account Control prompt.
 4. Read the final report. Connect a phone or laptop to the hotspot.
 
@@ -34,18 +69,72 @@ and the password is always `12345678`. The report at the end prints the exact na
 
 ---
 
+## What the installer does
+
+`Install-AutoHotspot.ps1` is the whole install in one file:
+
+1. **Elevates** — relaunches itself as Administrator through UAC if it is not already.
+2. **Downloads** `New-AutoHotspot.ps1` to `%ProgramData%\AutoHotspot\`.
+3. **Unblocks** it — strips the Mark-of-the-Web.
+4. **Runs** it: 32-client cap, idle auto-off disabled, 5 GHz, UUID SSID, password
+   forced to `12345678`, then starts the hotspot.
+5. **Installs the SYSTEM task** — boot, logon, and every 5 minutes.
+6. **Reboots** — 30-second countdown, `Ctrl+C` to cancel.
+
+### Why the payload is saved to disk instead of piped straight into `iex`
+
+This is the one non-obvious part, and it matters.
+
+`New-AutoHotspot.ps1` registers a scheduled task pointing at **its own path**, read from
+`$PSCommandPath`. When a script is piped into `iex` there is no file behind it, so
+`$PSCommandPath` is empty and the task gets registered pointing at `""` — a task that
+looks installed, reports no error, and silently never runs again. The hotspot would come
+back once after install and then never again.
+
+So the installer always writes the payload to disk and invokes it with `-File`. It also
+uses `%ProgramData%` rather than `%TEMP%`, because Windows is free to clear `%TEMP%` and
+that would leave the scheduled task pointing at a file that no longer exists.
+
+The same trap applies if you ever try to run the payload yourself with `irm | iex`.
+Download it to a real file first:
+
+```powershell
+irm https://raw.githubusercontent.com/iamawanishmaurya/auto-hotspot/main/New-AutoHotspot.ps1 -OutFile .\New-AutoHotspot.ps1
+Unblock-File .\New-AutoHotspot.ps1
+.\New-AutoHotspot.ps1 -NoReboot
+```
+
+### Installer options
+
+```
+-NoReboot                  configure and start, but do not reboot
+-RebootDelaySeconds 30     countdown length before the reboot (5-300)
+-Band 5GHz                 Auto, 2.4GHz, 5GHz or 6GHz
+-Ssid MyLab                pin the hotspot name
+-PayloadUrl <url>          install from a fork or a local file
+```
+
+Because it is piped, pass parameters to the installer with the scriptblock form —
+`| iex -NoReboot`, not `| iex -NoReboot $false`.
+
+---
+
 ## Before you start: read this bit
 
-**Running `New-AutoHotspot.ps1` with no arguments reboots the computer after a
-20-second countdown.** This is the script's own default behaviour, not a launcher
-quirk — see the note under [Reboot behaviour](#reboot-behaviour) below.
+**The install reboots the computer.** `Install-AutoHotspot.ps1` and `Install.cmd` both
+end with a countdown and a restart. That is the point — it proves the hotspot comes back
+by itself on a cold boot — but it means you should save your work first. The countdown
+is 30 seconds and `Ctrl+C` cancels it.
 
-`Run-Hotspot.cmd` passes `-NoReboot` for you, so double-clicking it is safe. If you
-ever run the `.ps1` by hand, add `-NoReboot`, or be ready to save your work.
+`Run-Hotspot.cmd` and the curl one-liner with `| iex -NoReboot` do not reboot.
+
+**Running `New-AutoHotspot.ps1` with no arguments also reboots**, after 20 seconds. See
+[Reboot behaviour](#reboot-behaviour).
 
 **Administrator rights are required.** The registry keys, the scheduled task, and the
-Settings policy all live in `HKLM`, which only an elevated process can write. Without
-elevation the script still starts the hotspot, but it cannot lock it down and prints a
+Settings policy all live in `HKLM`, which only an elevated process can write. The
+installer and both `.cmd` launchers handle the UAC prompt for you. Run without elevation
+and the hotspot still starts, but it cannot be locked down, and the script prints a
 warning instead.
 
 **The hotspot is 5 GHz by default.** If nothing shows up in your phone's Wi-Fi list,
@@ -95,7 +184,8 @@ pin your own name instead.
 ### From the launchers
 
 ```
-Run-Hotspot.cmd                    full setup, then start
+Install.cmd                        full install, then reboot
+Run-Hotspot.cmd                    configure and start, no reboot
 Run-Hotspot.cmd -Show              report current state, change nothing
 Run-Hotspot.cmd -Ssid MyLabWiFi    use a custom name
 Run-Hotspot.cmd -Band 2.4GHz       2.4 GHz instead of 5 GHz
@@ -112,7 +202,16 @@ both switches at once.
 ### From PowerShell
 
 ```powershell
-# Full workflow
+# One-line install (downloads, elevates, configures, reboots)
+irm https://raw.githubusercontent.com/iamawanishmaurya/auto-hotspot/main/Install-AutoHotspot.ps1 | iex
+
+# Same, without the reboot
+irm https://raw.githubusercontent.com/iamawanishmaurya/auto-hotspot/main/Install-AutoHotspot.ps1 | iex -NoReboot
+
+# Installer already on disk, with options
+.\Install-AutoHotspot.ps1 -Band 2.4GHz -RebootDelaySeconds 60
+
+# The underlying script, directly
 .\New-AutoHotspot.ps1 -NoReboot
 
 # Show current configuration without changing anything
@@ -133,6 +232,7 @@ both switches at once.
 # Built-in help
 .\New-AutoHotspot.ps1 -Help
 Get-Help .\New-AutoHotspot.ps1 -Full
+Get-Help .\Install-AutoHotspot.ps1 -Full
 ```
 
 ### All parameters
@@ -160,25 +260,31 @@ Get-Help .\New-AutoHotspot.ps1 -Full
 
 ## Reboot behaviour
 
-This is the single most surprising thing about the script, so it is worth stating
-plainly:
+Three different paths reboot, for three different reasons. Worth knowing which is which:
+
+| Path | Reboots? | Why |
+| --- | --- | --- |
+| `Install.cmd` / `irm ... Install-AutoHotspot.ps1 \| iex` | **Yes**, 30s countdown | Deliberate. The installer owns the reboot so it can verify the whole thing end to end. |
+| `Install.cmd -NoReboot` or `\| iex -NoReboot` | No | |
+| `Run-Hotspot.cmd` | No | Passes `-NoReboot` unless you pass `-Reboot`. |
+| Bare `.\New-AutoHotspot.ps1` | **Yes**, 20s countdown | The script's own default, see below. |
+| The 5-minute guard task | Never | It always passes `-NoAutoTask -NoReboot`. |
+
+### The one that surprises people
 
 > **A bare `.\New-AutoHotspot.ps1` reboots the computer.** Press `Ctrl+C` during the
 > 20-second countdown to cancel it.
 
-The default run is treated as a full workflow run, and a full workflow run ends with a
+The default run counts as a full workflow run, and a full workflow run ends with a
 reboot so you can watch the auto-start task bring the hotspot back on a cold boot. The
-help text lists `-Reboot` as though it were optional; the code makes it the default.
+script's own `-Help` text lists `-Reboot` as though it were optional, but the code makes
+it the default. That mismatch is why `Run-Hotspot.cmd` and the installer both pass
+`-NoReboot` to the payload deliberately.
 
-Two ways to avoid it:
+`-Reboot` and `-NoReboot` together are rejected by the script, so the launchers treat an
+explicit `-Reboot` as "you know what you are doing" and stop injecting `-NoReboot`.
 
-- Use `Run-Hotspot.cmd`, which passes `-NoReboot` unless you explicitly ask it not to.
-- Run the script with `-NoReboot` yourself.
-
-`-Reboot` and `-NoReboot` together are rejected by the script, so the launcher treats an
-explicit `-Reboot` as "you know what you are doing" and stops injecting `-NoReboot`.
-
-The scheduled task is never affected — it always passes `-NoAutoTask -NoReboot`, so the
+The scheduled task is never affected. It always passes `-NoAutoTask -NoReboot`, so the
 5-minute guard will never reboot a machine out from under a user.
 
 ---
@@ -301,18 +407,25 @@ Headless runs — the boot, logon, and 5-minute guard runs — write to:
 %ProgramData%\AutoHotspot\run.log
 ```
 
-This is the first place to look when the hotspot is not coming back on its own and
-nobody is sitting at the machine to see an error.
+The installed copy of `New-AutoHotspot.ps1` sits in the same directory. This is the first
+place to look when the hotspot is not coming back on its own and nobody is sitting at
+the machine to see an error.
 
 ---
 
 ## Files
 
 ```
-New-AutoHotspot.ps1    The whole tool. Single file, no dependencies.
-Run-Hotspot.cmd        One-click launcher: UAC + unblock + execution-policy bypass.
-Revert-Hotspot.cmd     One-click full undo.
+Install-AutoHotspot.ps1  Installer. Downloads, elevates, runs, reboots. The curl target.
+New-AutoHotspot.ps1      The actual hotspot tool. Single file, no dependencies.
+
+Install.cmd              One-click install: UAC + run installer + reboot.
+Run-Hotspot.cmd          One-click configure and start, no reboot.
+Revert-Hotspot.cmd       One-click full undo.
 ```
+
+The installer downloads `New-AutoHotspot.ps1` to `%ProgramData%\AutoHotspot\` and runs it
+from there. That directory is also where the run log lives.
 
 ---
 
